@@ -6,7 +6,7 @@
 import os
 import time
 import shutil
-from comet_ml import Experiment
+from comet_utils import CometLogger
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.optim
@@ -28,8 +28,8 @@ best_prec1 = 0
 def main():
     global args, best_prec1
     args = parser.parse_args()
-    experiment = Experiment(auto_metric_logging=False)
-    experiment.log_code("./ops/dataset_config.py")
+    comet_logger = CometLogger(args.comet, auto_metric_logging=False)
+    comet_logger.log_code("./ops/dataset_config.py")
 
     num_class, args.train_list, args.val_list, args.root_path, prefix = dataset_config.return_dataset(args.dataset,
                                                                                                       args.modality)
@@ -53,7 +53,7 @@ def main():
         args.store_name += '_{}'.format(args.suffix)
     print('storing name: ' + args.store_name)
 
-    experiment.log_others(vars(args))
+    comet_logger.log_others(vars(args))
 
     check_rootfolders()
 
@@ -185,7 +185,7 @@ def main():
             group['name'], len(group['params']), group['lr_mult'], group['decay_mult'])))
 
     if args.evaluate:
-        validate(val_loader, model, criterion, 0, experiment=experiment)
+        validate(val_loader, model, criterion, 0, comet_logger=comet_logger)
         return
 
     log_training = open(os.path.join(args.root_log, args.store_name, 'log.csv'), 'w')
@@ -194,24 +194,24 @@ def main():
     tf_writer = SummaryWriter(log_dir=os.path.join(args.root_log, args.store_name))
     for epoch in range(args.start_epoch, args.epochs):
         adjust_learning_rate(optimizer, epoch, args.lr_type, args.lr_steps)
-        experiment.log_metric("lr", optimizer.param_groups[-1]['lr'],
-                              epoch=epoch)
+        comet_logger.log_metric("lr", optimizer.param_groups[-1]['lr'],
+                                epoch=epoch)
 
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, log_training, tf_writer,
-              experiment)
+              comet_logger)
 
         # evaluate on validation set
         if (epoch + 1) % args.eval_freq == 0 or epoch == args.epochs - 1:
             prec1 = validate(val_loader, model, criterion, epoch, log_training, tf_writer,
-                             experiment=experiment)
+                             comet_logger=comet_logger)
 
             # remember best prec@1 and save checkpoint
             is_best = prec1 > best_prec1
             best_prec1 = max(prec1, best_prec1)
             tf_writer.add_scalar('acc/test_top1_best', best_prec1, epoch)
-            experiment.log_metric("acc/test_top1_best", best_prec1,
-                                  epoch=epoch)
+            comet_logger.log_metric("acc/test_top1_best", best_prec1,
+                                    epoch=epoch)
 
             output_best = 'Best Prec@1: %.3f\n' % (best_prec1)
             print(output_best)
@@ -224,11 +224,11 @@ def main():
                 'state_dict': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'best_prec1': best_prec1,
-            }, is_best, experiment)
+            }, is_best, comet_logger)
 
 
 def train(train_loader, model, criterion, optimizer, epoch, log, tf_writer,
-          experiment):
+          comet_logger):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -277,12 +277,12 @@ def train(train_loader, model, criterion, optimizer, epoch, log, tf_writer,
         end = time.time()
 
         #Log losses to Comet
-        experiment.log_metric("loss/train", loss.item(), step=global_step,
-                              epoch=epoch)
-        experiment.log_metric("acc/train_top1", prec1, step=global_step,
-                              epoch=epoch)
-        experiment.log_metric("acc/train_top5", prec5, step=global_step,
-                              epoch=epoch)
+        comet_logger.log_metric("loss/train", loss.item(), step=global_step,
+                                epoch=epoch)
+        comet_logger.log_metric("acc/train_top1", prec1, step=global_step,
+                                epoch=epoch)
+        comet_logger.log_metric("acc/train_top5", prec5, step=global_step,
+                                epoch=epoch)
 
         if i % args.print_freq == 0:
             output = ('Epoch: [{0}][{1}/{2}], lr: {lr:.5f}\t'
@@ -304,7 +304,7 @@ def train(train_loader, model, criterion, optimizer, epoch, log, tf_writer,
 
 
 def validate(val_loader, model, criterion, epoch, log=None, tf_writer=None,
-             experiment=None):
+             comet_logger=None):
     batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
@@ -358,20 +358,20 @@ def validate(val_loader, model, criterion, epoch, log=None, tf_writer=None,
         tf_writer.add_scalar('acc/test_top1', top1.avg, epoch)
         tf_writer.add_scalar('acc/test_top5', top5.avg, epoch)
 
-    experiment.log_metric("loss/test", losses.avg, epoch=epoch)
-    experiment.log_metric("acc/test_top1", top1.avg, epoch=epoch)
-    experiment.log_metric("acc/test_top5", top5.avg, epoch=epoch)
+    comet_logger.log_metric("loss/test", losses.avg, epoch=epoch)
+    comet_logger.log_metric("acc/test_top1", top1.avg, epoch=epoch)
+    comet_logger.log_metric("acc/test_top5", top5.avg, epoch=epoch)
 
     return top1.avg
 
 
-def save_checkpoint(state, is_best, experiment):
+def save_checkpoint(state, is_best, comet_logger):
     filename = '%s/%s/ckpt.pth.tar' % (args.root_model, args.store_name)
     torch.save(state, filename)
-    experiment.log_model("TSM", filename)
+    comet_logger.log_model("TSM", filename)
     if is_best:
         shutil.copyfile(filename, filename.replace('pth.tar', 'best.pth.tar'))
-        experiment.log_model("TSM", filename.replace('pth.tar', 'best.pth.tar'))
+        comet_logger.log_model("TSM", filename.replace('pth.tar', 'best.pth.tar'))
 
 
 def adjust_learning_rate(optimizer, epoch, lr_type, lr_steps):
